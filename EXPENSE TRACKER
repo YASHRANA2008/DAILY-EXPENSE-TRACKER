@@ -1,0 +1,925 @@
+/*
+ * ==========================================================================
+ *  PROJECT  : Daily Expense Tracker  (menu-driven console program)
+ *
+ *  Every feature below uses only topics from your syllabus:
+ *
+ *  UNIT I
+ *    - program structure, data types, scope (global/local), printf/scanf
+ *    - all operators, typecasting, if/else, switch, ?: operator
+ *    - for / while / do-while, break, continue, pattern printing (bar chart)
+ *
+ *  UNIT II
+ *    - 1D arrays (dayTotal[], catTotal[]), 2D array (categories[][]),
+ *      sorting (bubble sort), searching (linear search)
+ *    - strings: fgets, strcpy, strcmp, strlen + manual string manipulation
+ *      (toLowerChar, containsIgnoreCase, capitalizeFirst)
+ *    - pointers, pointer arithmetic, NULL / dangling pointer handling,
+ *      calloc(), realloc(), free()
+ *
+ *  UNIT III
+ *    - functions, call by value / call by reference, recursion (sumFrom)
+ *    - structures, array of structures (struct Expense)
+ *    - text file (report) and binary file (data) handling
+ *    - command-line arguments, preprocessor directives and macros
+ *
+ *  Compile : gcc daily_expense_tracker.c -o tracker
+ *  Run     : ./tracker                  (uses expenses.dat)
+ *            ./tracker myfile.dat       (uses a different data file)
+ * ==========================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* ------------------------- Preprocessor and macros ------------------------- */
+#ifndef CURRENCY
+#define CURRENCY "Rs."              /* change with: gcc -DCURRENCY='"$"' ... */
+#endif
+
+#define DEFAULT_DATA_FILE "expenses.dat"
+#define REPORT_FILE       "expense_report.txt"
+#define CATEGORY_COUNT    6
+#define CATEGORY_LEN      15
+#define DESC_LEN          50
+#define INITIAL_CAPACITY  10
+#define MAX_AMOUNT        10000000.0f
+
+#define LINE() printf("-----------------------------------------------------------------\n")
+#define PERCENT(part, whole) (((whole) > 0) ? ((part) * 100 / (whole)) : 0)
+
+/* ------------------------------ Structure ------------------------------ */
+struct Expense
+{
+    int day, month, year;
+    char category[CATEGORY_LEN];
+    char description[DESC_LEN];
+    float amount;
+};
+
+/* ----------------------------- Global data ----------------------------- */
+struct Expense *list = NULL;        /* dynamic array of expenses          */
+int expenseCount = 0;               /* how many expenses are stored       */
+int capacity = 0;                   /* how many fit before realloc()      */
+float dailyBudget = 500.0f;         /* daily spending limit               */
+char dataFile[100];                 /* name of the binary data file       */
+
+char categories[CATEGORY_COUNT][CATEGORY_LEN] =
+    {"Food", "Travel", "Shopping", "Bills", "Study", "Other"};
+
+/* ------------------------------ Prototypes ------------------------------ */
+/* input helpers */
+void readLine(char prompt[], char buffer[], int size);
+int readInt(char prompt[]);
+float readFloat(char prompt[]);
+int chooseCategory(void);
+
+/* dates */
+int isLeapYear(int year);
+int daysInMonth(int month, int year);
+int isValidDate(int d, int m, int y);
+void readDate(int *d, int *m, int *y);
+long dateKey(struct Expense e);
+
+/* manual string functions */
+char toLowerChar(char c);
+int containsIgnoreCase(char text[], char word[]);
+void capitalizeFirst(char s[]);
+
+/* memory and files */
+void ensureCapacity(void);
+void saveData(void);
+void loadData(void);
+
+/* display */
+void printHeader(void);
+void printRow(int serial, struct Expense *p);
+
+/* features */
+void addExpense(void);
+void viewAll(void);
+void viewByDate(void);
+void monthlySummary(void);
+void searchByCategory(void);
+void searchByKeyword(void);
+void deleteExpense(void);
+void swapExpenses(struct Expense *a, struct Expense *b);
+void sortExpenses(void);
+float totalForDate(int d, int m, int y);
+float sumFrom(int index);
+void showStatistics(void);
+void setBudget(void);
+void exportReport(void);
+
+/* ============================== main() ============================== */
+int main(int argc, char *argv[])
+{
+    int choice;
+
+    /* command-line argument: optional data file name */
+    if (argc > 1)
+    {
+        strncpy(dataFile, argv[1], sizeof(dataFile) - 1);
+        dataFile[sizeof(dataFile) - 1] = '\0';
+    }
+    else
+    {
+        strcpy(dataFile, DEFAULT_DATA_FILE);
+    }
+
+    printf("=================================================================\n");
+    printf("\t\tDAILY EXPENSE TRACKER\n");
+    printf("=================================================================\n");
+
+    loadData();
+    printf("Data file : %s\n", dataFile);
+    printf("Expenses  : %d stored\n", expenseCount);
+    printf("Daily budget: %s %.2f\n", CURRENCY, dailyBudget);
+
+    do
+    {
+        printf("\n=============== MAIN MENU ===============\n");
+        printf("  1. Add expense\n");
+        printf("  2. View all expenses\n");
+        printf("  3. View expenses of a date\n");
+        printf("  4. Monthly summary\n");
+        printf("  5. Search by category\n");
+        printf("  6. Search by keyword\n");
+        printf("  7. Delete an expense\n");
+        printf("  8. Sort expenses\n");
+        printf("  9. Overall statistics\n");
+        printf(" 10. Set daily budget\n");
+        printf(" 11. Export report to text file\n");
+        printf("  0. Save and exit\n");
+        printf("=========================================\n");
+        choice = readInt("Enter your choice: ");
+
+        switch (choice)
+        {
+        case 1:  addExpense();      break;
+        case 2:  viewAll();         break;
+        case 3:  viewByDate();      break;
+        case 4:  monthlySummary();  break;
+        case 5:  searchByCategory(); break;
+        case 6:  searchByKeyword(); break;
+        case 7:  deleteExpense();   break;
+        case 8:  sortExpenses();    break;
+        case 9:  showStatistics();  break;
+        case 10: setBudget();       break;
+        case 11: exportReport();    break;
+        case 0:
+            saveData();
+            printf("\nData saved to %s. Goodbye!\n", dataFile);
+            break;
+        default:
+            printf("Invalid choice! Enter a number from 0 to 11.\n");
+        }
+    } while (choice != 0);
+
+    free(list);
+    list = NULL;        /* avoid a dangling pointer after free() */
+    return 0;
+}
+
+/* ============================ Input helpers ============================ */
+
+/* Reads one line safely (fgets) and removes the trailing newline. */
+void readLine(char prompt[], char buffer[], int size)
+{
+    int len, ch;
+
+    printf("%s", prompt);
+    if (fgets(buffer, size, stdin) == NULL)
+    {
+        printf("\nInput ended. Saving and exiting...\n");
+        saveData();
+        free(list);
+        list = NULL;
+        exit(0);
+    }
+
+    len = (int)strlen(buffer);
+    if (len > 0 && buffer[len - 1] == '\n')
+    {
+        buffer[len - 1] = '\0';
+    }
+    else
+    {
+        /* line was longer than the buffer: throw away the rest */
+        while ((ch = getchar()) != '\n' && ch != EOF)
+            ;
+    }
+}
+
+int readInt(char prompt[])
+{
+    char buffer[50];
+    int value;
+
+    while (1)
+    {
+        readLine(prompt, buffer, sizeof(buffer));
+        if (sscanf(buffer, "%d", &value) == 1)
+            return value;
+        printf("Invalid number! Please try again.\n");
+    }
+}
+
+float readFloat(char prompt[])
+{
+    char buffer[50];
+    float value;
+
+    while (1)
+    {
+        readLine(prompt, buffer, sizeof(buffer));
+        if (sscanf(buffer, "%f", &value) == 1)
+            return value;
+        printf("Invalid number! Please try again.\n");
+    }
+}
+
+/* Shows the category list and returns a choice from 1 to CATEGORY_COUNT */
+int chooseCategory(void)
+{
+    int i, choice;
+
+    printf("Categories:\n");
+    for (i = 0; i < CATEGORY_COUNT; i++)
+        printf("  %d. %s\n", i + 1, categories[i]);
+
+    do
+    {
+        choice = readInt("Choose category number: ");
+        if (choice < 1 || choice > CATEGORY_COUNT)
+            printf("Invalid category! Choose 1 to %d.\n", CATEGORY_COUNT);
+    } while (choice < 1 || choice > CATEGORY_COUNT);
+
+    return choice;
+}
+
+/* =============================== Dates =============================== */
+
+int isLeapYear(int year)
+{
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+int daysInMonth(int month, int year)
+{
+    int days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    if (month == 2 && isLeapYear(year))
+        return 29;
+    return days[month - 1];
+}
+
+int isValidDate(int d, int m, int y)
+{
+    if (y < 2000 || y > 2100)
+        return 0;
+    if (m < 1 || m > 12)
+        return 0;
+    if (d < 1 || d > daysInMonth(m, y))
+        return 0;
+    return 1;
+}
+
+/* Call by reference: the three values are filled through pointers. */
+void readDate(int *d, int *m, int *y)
+{
+    while (1)
+    {
+        *d = readInt("  Day   (1-31)      : ");
+        *m = readInt("  Month (1-12)      : ");
+        *y = readInt("  Year  (e.g. 2026) : ");
+
+        if (isValidDate(*d, *m, *y))
+            return;
+        printf("Invalid date! Please enter the date again.\n");
+    }
+}
+
+/* Call by value: a copy of the structure is received. Gives yyyymmdd. */
+long dateKey(struct Expense e)
+{
+    return e.year * 10000L + e.month * 100 + e.day;
+}
+
+/* ====================== Manual string manipulation ====================== */
+
+char toLowerChar(char c)
+{
+    if (c >= 'A' && c <= 'Z')
+        return (char)(c + 32);
+    return c;
+}
+
+/* Returns 1 if 'word' appears anywhere inside 'text' (ignoring case). */
+int containsIgnoreCase(char text[], char word[])
+{
+    int i, j;
+    int textLen = (int)strlen(text);
+    int wordLen = (int)strlen(word);
+
+    if (wordLen == 0)
+        return 0;
+
+    for (i = 0; i + wordLen <= textLen; i++)
+    {
+        for (j = 0; j < wordLen; j++)
+        {
+            if (toLowerChar(text[i + j]) != toLowerChar(word[j]))
+                break;
+        }
+        if (j == wordLen)
+            return 1;
+    }
+    return 0;
+}
+
+void capitalizeFirst(char s[])
+{
+    if (s[0] >= 'a' && s[0] <= 'z')
+        s[0] = (char)(s[0] - 32);
+}
+
+/* ======================= Dynamic memory and files ======================= */
+
+/* Makes sure there is room for one more expense (calloc, then realloc). */
+void ensureCapacity(void)
+{
+    struct Expense *temp;
+    int newCapacity;
+
+    if (list == NULL)
+    {
+        list = (struct Expense *)calloc(INITIAL_CAPACITY, sizeof(struct Expense));
+        if (list == NULL)
+        {
+            printf("Memory allocation failed!\n");
+            exit(1);
+        }
+        capacity = INITIAL_CAPACITY;
+    }
+    else if (expenseCount >= capacity)
+    {
+        newCapacity = capacity * 2;
+        temp = (struct Expense *)realloc(list, newCapacity * sizeof(struct Expense));
+        if (temp == NULL)       /* keep the old block if realloc fails */
+        {
+            printf("Memory allocation failed! Cannot add more expenses.\n");
+            saveData();
+            exit(1);
+        }
+        list = temp;
+        capacity = newCapacity;
+    }
+}
+
+/* Binary file layout: budget, count, then 'count' structures. */
+void saveData(void)
+{
+    FILE *fp = fopen(dataFile, "wb");
+
+    if (fp == NULL)
+    {
+        printf("Warning: could not save data to %s\n", dataFile);
+        return;
+    }
+
+    fwrite(&dailyBudget, sizeof(float), 1, fp);
+    fwrite(&expenseCount, sizeof(int), 1, fp);
+    if (expenseCount > 0)
+        fwrite(list, sizeof(struct Expense), expenseCount, fp);
+
+    fclose(fp);
+}
+
+void loadData(void)
+{
+    FILE *fp = fopen(dataFile, "rb");
+    float budget;
+    int n, loaded, i;
+
+    if (fp == NULL)
+    {
+        printf("No saved data found. Starting with an empty tracker.\n");
+        return;
+    }
+
+    if (fread(&budget, sizeof(float), 1, fp) != 1 ||
+        fread(&n, sizeof(int), 1, fp) != 1 ||
+        n < 0 || n > 1000000)
+    {
+        printf("Data file is damaged. Starting with an empty tracker.\n");
+        fclose(fp);
+        return;
+    }
+
+    capacity = n + INITIAL_CAPACITY;
+    list = (struct Expense *)calloc(capacity, sizeof(struct Expense));
+    if (list == NULL)
+    {
+        printf("Memory allocation failed!\n");
+        fclose(fp);
+        exit(1);
+    }
+
+    loaded = 0;
+    if (n > 0)
+        loaded = (int)fread(list, sizeof(struct Expense), n, fp);
+    fclose(fp);
+
+    if (loaded != n)
+        printf("Warning: file incomplete, loaded %d of %d records.\n", loaded, n);
+
+    /* make sure every string ends properly even if the file was edited */
+    for (i = 0; i < loaded; i++)
+    {
+        list[i].category[CATEGORY_LEN - 1] = '\0';
+        list[i].description[DESC_LEN - 1] = '\0';
+    }
+
+    expenseCount = loaded;
+    if (budget > 0)
+        dailyBudget = budget;
+}
+
+/* ============================== Display ============================== */
+
+void printHeader(void)
+{
+    LINE();
+    printf("%-4s %-10s %-10s %-24s %13s\n",
+           "No.", "Date", "Category", "Description", "Amount");
+    LINE();
+}
+
+void printRow(int serial, struct Expense *p)
+{
+    printf("%-4d %02d/%02d/%04d %-10s %-24.24s %s %9.2f\n",
+           serial, p->day, p->month, p->year,
+           p->category, p->description, CURRENCY, p->amount);
+}
+
+/* ============================= Features ============================= */
+
+void addExpense(void)
+{
+    struct Expense e;
+    int choice;
+    float dayTotal;
+
+    printf("\n--- Add New Expense ---\n");
+    printf("Enter the date of the expense:\n");
+    readDate(&e.day, &e.month, &e.year);
+
+    choice = chooseCategory();
+    strcpy(e.category, categories[choice - 1]);
+
+    readLine("Description (e.g. lunch, bus ticket): ", e.description, DESC_LEN);
+    if (strlen(e.description) == 0)
+        strcpy(e.description, "No description");
+    capitalizeFirst(e.description);
+
+    do
+    {
+        e.amount = readFloat("Amount: ");
+        if (!(e.amount > 0 && e.amount <= MAX_AMOUNT))
+            printf("Amount must be greater than 0 and at most %.0f.\n", MAX_AMOUNT);
+    } while (!(e.amount > 0 && e.amount <= MAX_AMOUNT));
+
+    ensureCapacity();
+    list[expenseCount] = e;
+    expenseCount++;
+    saveData();
+    printf("\nExpense added successfully!\n");
+
+    dayTotal = totalForDate(e.day, e.month, e.year);
+    printf("Spent on %02d/%02d/%04d : %s %.2f  (budget %s %.2f)\n",
+           e.day, e.month, e.year, CURRENCY, dayTotal, CURRENCY, dailyBudget);
+
+    if (dayTotal > dailyBudget)
+        printf("WARNING: Daily budget exceeded by %s %.2f!\n",
+               CURRENCY, dayTotal - dailyBudget);
+    else
+        printf("Remaining budget for the day: %s %.2f\n",
+               CURRENCY, dailyBudget - dayTotal);
+}
+
+void viewAll(void)
+{
+    struct Expense *p;
+    float total = 0;
+
+    if (expenseCount == 0)
+    {
+        printf("\nNo expenses recorded yet.\n");
+        return;
+    }
+
+    printf("\n--- All Expenses ---\n");
+    printHeader();
+
+    /* pointer arithmetic: p walks from list[0] to list[expenseCount - 1] */
+    for (p = list; p < list + expenseCount; p++)
+    {
+        printRow((int)(p - list) + 1, p);
+        total += p->amount;
+    }
+
+    LINE();
+    printf("Total of %d expenses: %s %.2f\n", expenseCount, CURRENCY, total);
+}
+
+void viewByDate(void)
+{
+    int d, m, y, i, found = 0;
+    float total = 0;
+
+    printf("\n--- Expenses of a Date ---\n");
+    readDate(&d, &m, &y);
+
+    for (i = 0; i < expenseCount; i++)
+    {
+        if (list[i].day == d && list[i].month == m && list[i].year == y)
+        {
+            if (!found)
+                printHeader();
+            printRow(i + 1, &list[i]);
+            total += list[i].amount;
+            found++;
+        }
+    }
+
+    if (!found)
+    {
+        printf("No expenses found on %02d/%02d/%04d.\n", d, m, y);
+        return;
+    }
+
+    LINE();
+    printf("Total spent : %s %.2f\n", CURRENCY, total);
+    printf("Daily budget: %s %.2f\n", CURRENCY, dailyBudget);
+    if (total > dailyBudget)
+        printf("Over budget by %s %.2f\n", CURRENCY, total - dailyBudget);
+    else
+        printf("Remaining   : %s %.2f\n", CURRENCY, dailyBudget - total);
+}
+
+void monthlySummary(void)
+{
+    int m, y, i, c, d, days, entries = 0, daysOver = 0, maxDayNo = 0, bars;
+    float monthTotal = 0, maxDay = 0, percent;
+    float catTotal[CATEGORY_COUNT] = {0};
+    float dayTotal[32] = {0};
+
+    printf("\n--- Monthly Summary ---\n");
+    m = readInt("Month (1-12)      : ");
+    y = readInt("Year (e.g. 2026)  : ");
+
+    if (!isValidDate(1, m, y))
+    {
+        printf("Invalid month or year!\n");
+        return;
+    }
+
+    for (i = 0; i < expenseCount; i++)
+    {
+        if (list[i].month == m && list[i].year == y)
+        {
+            entries++;
+            monthTotal += list[i].amount;
+
+            if (list[i].day >= 1 && list[i].day <= 31)
+                dayTotal[list[i].day] += list[i].amount;
+
+            for (c = 0; c < CATEGORY_COUNT; c++)
+            {
+                if (strcmp(list[i].category, categories[c]) == 0)
+                {
+                    catTotal[c] += list[i].amount;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (entries == 0)
+    {
+        printf("No expenses found for %02d/%04d.\n", m, y);
+        return;
+    }
+
+    days = daysInMonth(m, y);
+    for (d = 1; d <= days; d++)
+    {
+        if (dayTotal[d] > dailyBudget)
+            daysOver++;
+        if (dayTotal[d] > maxDay)
+        {
+            maxDay = dayTotal[d];
+            maxDayNo = d;
+        }
+    }
+
+    printf("\nSummary for %02d/%04d\n", m, y);
+    LINE();
+    printf("Number of expenses     : %d\n", entries);
+    printf("Total spent            : %s %.2f\n", CURRENCY, monthTotal);
+    printf("Average per day        : %s %.2f\n", CURRENCY, monthTotal / days);
+    printf("Highest spending day   : %02d/%02d/%04d (%s %.2f)\n",
+           maxDayNo, m, y, CURRENCY, maxDay);
+    printf("Days over daily budget : %d\n", daysOver);
+
+    printf("\nCategory-wise spending (each # = 5%%)\n");
+    LINE();
+    for (c = 0; c < CATEGORY_COUNT; c++)
+    {
+        percent = PERCENT(catTotal[c], monthTotal);
+        printf("%-10s %s %9.2f (%5.1f%%) ", categories[c], CURRENCY,
+               catTotal[c], percent);
+        for (bars = 0; bars < (int)(percent / 5); bars++)
+            printf("#");
+        printf("\n");
+    }
+}
+
+void searchByCategory(void)
+{
+    int choice, i, found = 0;
+    float total = 0;
+
+    printf("\n--- Search by Category ---\n");
+    choice = chooseCategory();
+
+    for (i = 0; i < expenseCount; i++)
+    {
+        if (strcmp(list[i].category, categories[choice - 1]) == 0)
+        {
+            if (!found)
+                printHeader();
+            printRow(i + 1, &list[i]);
+            total += list[i].amount;
+            found++;
+        }
+    }
+
+    if (!found)
+    {
+        printf("No expenses found in %s.\n", categories[choice - 1]);
+        return;
+    }
+
+    LINE();
+    printf("%d expense(s) in %s, total %s %.2f\n",
+           found, categories[choice - 1], CURRENCY, total);
+}
+
+void searchByKeyword(void)
+{
+    char keyword[DESC_LEN];
+    int i, found = 0;
+    float total = 0;
+
+    printf("\n--- Search by Keyword ---\n");
+    readLine("Enter a word to search in descriptions: ", keyword, DESC_LEN);
+
+    if (strlen(keyword) == 0)
+    {
+        printf("Keyword cannot be empty.\n");
+        return;
+    }
+
+    for (i = 0; i < expenseCount; i++)
+    {
+        if (containsIgnoreCase(list[i].description, keyword))
+        {
+            if (!found)
+                printHeader();
+            printRow(i + 1, &list[i]);
+            total += list[i].amount;
+            found++;
+        }
+    }
+
+    if (!found)
+    {
+        printf("No expenses match \"%s\".\n", keyword);
+        return;
+    }
+
+    LINE();
+    printf("%d match(es), total %s %.2f\n", found, CURRENCY, total);
+}
+
+void deleteExpense(void)
+{
+    int serial, i;
+    char answer[10];
+
+    if (expenseCount == 0)
+    {
+        printf("\nNo expenses to delete.\n");
+        return;
+    }
+
+    viewAll();
+    serial = readInt("\nEnter the serial number to delete (0 to cancel): ");
+
+    if (serial == 0)
+    {
+        printf("Cancelled.\n");
+        return;
+    }
+    if (serial < 1 || serial > expenseCount)
+    {
+        printf("Invalid serial number!\n");
+        return;
+    }
+
+    readLine("Are you sure? (y/n): ", answer, sizeof(answer));
+    if (answer[0] == 'y' || answer[0] == 'Y')
+    {
+        for (i = serial - 1; i < expenseCount - 1; i++)
+            list[i] = list[i + 1];      /* shift later records one place left */
+        expenseCount--;
+        saveData();
+        printf("Expense deleted.\n");
+    }
+    else
+    {
+        printf("Cancelled.\n");
+    }
+}
+
+/* Call by reference: swaps two structures through their addresses. */
+void swapExpenses(struct Expense *a, struct Expense *b)
+{
+    struct Expense temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+void sortExpenses(void)
+{
+    int mode, i, j, needSwap;
+
+    if (expenseCount < 2)
+    {
+        printf("\nNeed at least two expenses to sort.\n");
+        return;
+    }
+
+    printf("\n--- Sort Expenses ---\n");
+    printf("  1. By amount (highest first)\n");
+    printf("  2. By date (oldest first)\n");
+    mode = readInt("Choose: ");
+
+    if (mode != 1 && mode != 2)
+    {
+        printf("Invalid choice!\n");
+        return;
+    }
+
+    /* bubble sort */
+    for (i = 0; i < expenseCount - 1; i++)
+    {
+        for (j = 0; j < expenseCount - 1 - i; j++)
+        {
+            if (mode == 1)
+                needSwap = list[j].amount < list[j + 1].amount;
+            else
+                needSwap = dateKey(list[j]) > dateKey(list[j + 1]);
+
+            if (needSwap)
+                swapExpenses(&list[j], &list[j + 1]);
+        }
+    }
+
+    saveData();
+    printf("Expenses sorted.\n");
+    viewAll();
+}
+
+/* Call by value: three plain numbers are copied into the function. */
+float totalForDate(int d, int m, int y)
+{
+    int i;
+    float total = 0;
+
+    for (i = 0; i < expenseCount; i++)
+    {
+        if (list[i].day == d && list[i].month == m && list[i].year == y)
+            total += list[i].amount;
+    }
+    return total;
+}
+
+/* Recursion: sum of amounts from position 'index' to the end of the list. */
+float sumFrom(int index)
+{
+    if (index >= expenseCount)          /* base case */
+        return 0;
+    return list[index].amount + sumFrom(index + 1);
+}
+
+void showStatistics(void)
+{
+    struct Expense *p, *highest, *lowest;
+    float total;
+
+    if (expenseCount == 0)
+    {
+        printf("\nNo expenses recorded yet.\n");
+        return;
+    }
+
+    total = sumFrom(0);
+    highest = lowest = list;
+    for (p = list; p < list + expenseCount; p++)
+    {
+        if (p->amount > highest->amount)
+            highest = p;
+        if (p->amount < lowest->amount)
+            lowest = p;
+    }
+
+    printf("\n--- Overall Statistics ---\n");
+    LINE();
+    printf("Total expenses recorded : %d\n", expenseCount);
+    printf("Total amount spent      : %s %.2f\n", CURRENCY, total);
+    printf("Average per expense     : %s %.2f\n", CURRENCY, total / expenseCount);
+    printf("Highest expense         : %s %.2f (%s, %02d/%02d/%04d)\n",
+           CURRENCY, highest->amount, highest->description,
+           highest->day, highest->month, highest->year);
+    printf("Lowest expense          : %s %.2f (%s, %02d/%02d/%04d)\n",
+           CURRENCY, lowest->amount, lowest->description,
+           lowest->day, lowest->month, lowest->year);
+}
+
+void setBudget(void)
+{
+    float newBudget;
+
+    printf("\nCurrent daily budget: %s %.2f\n", CURRENCY, dailyBudget);
+    newBudget = readFloat("Enter new daily budget (0 to cancel): ");
+
+    if (newBudget == 0)
+    {
+        printf("Cancelled.\n");
+    }
+    else if (!(newBudget > 0 && newBudget <= MAX_AMOUNT))
+    {
+        printf("Invalid budget!\n");
+    }
+    else
+    {
+        dailyBudget = newBudget;
+        saveData();
+        printf("Daily budget set to %s %.2f\n", CURRENCY, dailyBudget);
+    }
+}
+
+/* Text file handling: writes a readable report with fprintf. */
+void exportReport(void)
+{
+    FILE *fp;
+    int i;
+    float total = 0;
+
+    if (expenseCount == 0)
+    {
+        printf("\nNothing to export yet.\n");
+        return;
+    }
+
+    fp = fopen(REPORT_FILE, "w");
+    if (fp == NULL)
+    {
+        printf("Could not create %s\n", REPORT_FILE);
+        return;
+    }
+
+    fprintf(fp, "DAILY EXPENSE REPORT\n");
+    fprintf(fp, "====================\n\n");
+    fprintf(fp, "%-4s %-10s %-10s %-30s %s\n",
+            "No.", "Date", "Category", "Description", "Amount");
+
+    for (i = 0; i < expenseCount; i++)
+    {
+        fprintf(fp, "%-4d %02d/%02d/%04d %-10s %-30s %s %.2f\n",
+                i + 1, list[i].day, list[i].month, list[i].year,
+                list[i].category, list[i].description,
+                CURRENCY, list[i].amount);
+        total += list[i].amount;
+    }
+
+    fprintf(fp, "\nTotal expenses: %d\n", expenseCount);
+    fprintf(fp, "Total amount  : %s %.2f\n", CURRENCY, total);
+    fclose(fp);
+
+    printf("\nReport saved to %s\n", REPORT_FILE);
+}
