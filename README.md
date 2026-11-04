@@ -35,11 +35,14 @@ A modular, menu-driven **C console application** designed to help users log, man
 * Utilized operational parameters passed from host shells (`argc`/`argv`) alongside functional code-block conditional macros.
 
 ---
+<img width="1200" height="890" alt="01-main-menu" src="https://github.com/user-attachments/assets/21aad862-5191-4b82-8c12-86ec373f19d1" />
+<img width="1200" height="890" alt="01-main-menu" src="https://github.com/user-attachments/assets/fed3b0d3-76be-4924-b53b-85e253ca87d7" />
 
 ## 💾 Installation & Local Compilation
 
 ### Prerequisites
 Ensure you have a C compiler such as `gcc` or `clang` configured inside your command-line environment pathway.
+<img width="1200" height="516" alt="02-all-expenses" src="https://github.com/user-attachments/assets/547a2773-0177-4169-a9df-9b32531519a5" />
 
 ### Compilation
 Open your terminal emulator, navigate directly to your local project directory path, and compile the script:
@@ -47,6 +50,7 @@ Open your terminal emulator, navigate directly to your local project directory p
 ```bash
 gcc daily_expense_tracker.c -o tracker
 ```
+<img width="1200" height="754" alt="03-monthly-summary" src="https://github.com/user-attachments/assets/ba8be474-7559-4f06-bf7a-1161b271053a" />
 
 ### Passing Custom Currencies
 To override the default currency indicator (`Rs.`) at compile-time, feed an explicit macro variable directive directly to your compiler string:
